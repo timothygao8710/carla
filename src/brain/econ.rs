@@ -31,9 +31,6 @@ impl Brain {
 
     fn cube_wanted(&self, cubes: f64) -> bool {
         let cap = self.cfg.cubes.stat_cap;
-        if self.p.cube_avoid > 0.0 {
-            return cubes < self.p.cube_avoid.min(cap);
-        }
         cubes < cap || (cubes >= 13.0 && cubes < 15.0)
     }
 
