@@ -105,8 +105,6 @@ pub struct Brain {
     pub(crate) sf: safety::Safety,
     pub(crate) wave: wave::WaveState,
     pub(crate) ffa: ffa::Ffa,
-    pub(crate) ffa2: ffa::Ffa,
-    pub(crate) ffa2_said: bool,
     pub(crate) spot: Option<(V3, f64, bool)>,
     pub(crate) order: order::Order,
     pub(crate) order_has_passive: bool,
@@ -187,8 +185,6 @@ impl Brain {
             sf: safety::Safety::default(),
             wave: wave::WaveState::new(),
             ffa: ffa::Ffa::new(hello.seed),
-            ffa2: ffa::Ffa::new(hello.seed),
-            ffa2_said: false,
             spot: None,
             order: order::Order::default(),
             order_has_passive: false,
@@ -237,11 +233,6 @@ impl Brain {
         }
         self.wave_update(obs, world, nav);
         self.ffa.update(obs, &self.mem.tracks, self.p.ffa_on > 0.5 || self.p.mode_detect > 0.5);
-        self.ffa2.update(obs, &self.mem.tracks, true);
-        if self.ffa2.on && !self.ffa2_said {
-            self.ffa2_said = true;
-            println!("{{\"ffa\":1}}");
-        }
         self.order.update(obs);
         self.tele_update(obs);
         if self.p.halt_multi >= 1.0 && !self.order.halted && self.order.on_us(obs.t) as f64 >= self.p.halt_multi {
