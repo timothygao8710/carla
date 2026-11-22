@@ -13,7 +13,7 @@ use crate::brain::Brain;
 use crate::proto::{Action, Hello, Obs, Ready, ServerMsg};
 use crate::Shared;
 
-pub const BOT_NAME: &str = "not-even-close";
+pub const BOT_NAME: &str = "automata";
 
 static LOG: AtomicBool = AtomicBool::new(false);
 

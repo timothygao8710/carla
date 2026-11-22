@@ -1,4 +1,3 @@
-use super::duel::{self, Loadout};
 use super::math::*;
 use super::memory::Track;
 use super::{Brain, Goal, Mode, Tgt};
@@ -39,16 +38,6 @@ fn ground(world: &World, p: V2) -> V3 {
 }
 
 impl Brain {
-    /// Cubes worth collecting: the stat cap, or the cube limit when one is set.
-    pub(crate) fn cube_cap(&self) -> f64 {
-        let cap = self.cfg.cubes.stat_cap;
-        if self.p.cube_avoid > 0.0 {
-            cap.min(self.p.cube_avoid)
-        } else {
-            cap
-        }
-    }
-
     fn safe_radius(&self, z: &ZoneObs) -> f64 {
         let p = &self.p;
         if z.next_radius <= p.final_radius {
@@ -64,6 +53,9 @@ impl Brain {
 
     fn ensure_zone_field(&mut self, obs: &Obs, world: &World, nav: &Nav) {
         let z = &obs.zone;
+        if let Some((k, _, f)) = super::fieldsvc::poll(&mut self.fsvc.zone) {
+            self.zone_field = Some(([k[0], k[1]], k[2], std::sync::Arc::new(f)));
+        }
         if let Some((c, r, _)) = &self.zone_field {
             if (c[0] - z.next_center[0]).hypot(c[1] - z.next_center[1]) < 0.5 && (r - z.next_radius).abs() < 0.5 {
                 return;
@@ -92,8 +84,15 @@ impl Brain {
             }
         }
         let jet = if safe_r < 8.0 { obs.me.max_energy * 0.8 } else { -1.0 };
-        let f = nav.field_multi(&seeds, jet);
-        self.zone_field = Some((c, z.next_radius, std::sync::Arc::new(f)));
+        let _ = nav;
+        let key = [c[0], c[1], z.next_radius, jet];
+        let budget = self.budget;
+        let shared = self.shared.clone();
+        let got = super::fieldsvc::request(&mut self.fsvc, 0, &shared, key, 0.0, obs.t, &budget, 14.0, move |nav| nav.field_multi(&seeds, jet));
+        match got {
+            Some(f) => self.zone_field = Some((c, z.next_radius, std::sync::Arc::new(f))),
+            None => self.zone_field = None,
+        }
     }
 
     pub(crate) fn zone_info(&mut self, obs: &Obs, world: &World, nav: &Nav) -> ZoneInfo {
@@ -155,7 +154,6 @@ impl Brain {
         let t = obs.t;
         let pos = me.pos;
         let hpf = frac(me.hp, me.max_hp);
-        self.stand_off = false;
         let zi = self.zone_info(obs, world, nav);
         self.sq_update(obs, nav);
         let muzzle = up(pos, me.stats.muzzle_height);
@@ -224,6 +222,7 @@ impl Brain {
         let loot = self.choose_loot(obs, &zi);
         let harvest = if held { None } else { self.harvest(obs, &zi, n_att, near_mech) };
         let gearg = if held { None } else if want_retreat || avoid { self.gear_grab(obs, &zi) } else { self.gear_goal(obs, &zi, tgt.as_ref()).or_else(|| if p.gear_grab_always > 0.5 { self.gear_grab(obs, &zi) } else { None }) };
+        let (gearg, harvest) = if self.tk_no_detour() { (gearg.filter(|g| dist(g.1, pos) < p.sk_detour), harvest.filter(|g| dist(g.1, pos) < p.sk_detour)) } else { (gearg, harvest) };
         let farm = !held && self.gear_farm_mode(obs, tgt.as_ref());
         let gear_drop = self.gear_drop_ok(obs, tgt.as_ref());
         let hunt_near = if self.gear_on() { self.gear_near_real(obs) } else { near_mech };
@@ -232,8 +231,10 @@ impl Brain {
             self.econ.resting = false;
         }
         let drop = self.choose_drop(obs, &zi).filter(|_| !held || near_mem > 100.0);
+        let vdrop = self.dp_pick(obs, drop, tgt.as_ref(), want_retreat, hpf);
+        let near_item = |g: &Option<(i64, V3)>| g.map_or(false, |x| dist(x.1, pos) < p.sk_detour);
+        let vseek = if tgt.is_none() && !want_retreat && !avoid && !held && !near_item(&gearg) && !near_item(&harvest) { self.seek_goal(obs, &zi) } else { self.vx.seeking = false; None };
         let z = &obs.zone;
-        let save_drop = p.drop_save > 0.0 && hpf >= p.drop_save && me.cubes >= self.cube_cap() && self.squad_mode();
         let endgame = held && z.next_radius <= 0.5 && z.shrink_end - t < 40.0;
         let mut mode;
         let mut goal;
@@ -249,10 +250,24 @@ impl Brain {
         } else if zi.urgent {
             mode = Mode::Zone;
             goal = Goal::Field { center: obs.zone.next_center, arrive: 1.5 };
-        } else if let Some(d) = drop.filter(|d| p.drop_heal > 0.0 && hpf < p.drop_heal && d.2 < p.drop_heal_dist && (want_retreat || tgt.is_some())) {
-            // a supply drop repairs in full: hurt, it comes before cover and before the fight
+        } else if self.vx.regroup || self.vx.kite {
+            mode = Mode::Retreat;
+            goal = if self.vx.kite { self.kite_goal(obs, world, nav, &zi) } else { Goal::None };
+            if matches!(goal, Goal::None) {
+                goal = self.cover_goal(obs, world, nav, &zi);
+            }
+            if self.vx.regroup {
+                target = Tgt::None;
+            }
+        } else if let Some(d) = vdrop {
             mode = Mode::Drop;
             goal = Goal::Nav { pos: d.0, arrive: (d.1 * 0.3).max(1.0) };
+        } else if let Some((id, q)) = vseek {
+            mode = Mode::Hunt;
+            goal = Goal::Nav { pos: q, arrive: 15.0 };
+            if id >= 0 {
+                target = Tgt::Mech(id);
+            }
         } else if let Some((id, gp)) = gearg.filter(|_| want_retreat || avoid) {
             mode = Mode::Loot;
             goal = Goal::Nav { pos: gp, arrive: 1.0 };
@@ -275,13 +290,9 @@ impl Brain {
             mode = Mode::Loot;
             goal = Goal::Nav { pos: l.pos, arrive: 1.2 };
             goal_id = l.id;
-        } else if let Some(d) = drop.filter(|d| (tgt.is_none() || d.2 < 50.0 || hpf < 0.6 || gear_drop) && !save_drop) {
+        } else if let Some(d) = drop.filter(|d| tgt.is_none() || d.2 < 50.0 || hpf < 0.6 || gear_drop) {
             mode = Mode::Drop;
             goal = Goal::Nav { pos: d.0, arrive: (d.1 * 0.3).max(1.0) };
-        } else if let Some(d) = drop.filter(|d| save_drop && tgt.is_none() && d.2 < p.drop_save_dist) {
-            // full and capped: keep the repair for later and wait next to the ring instead of taking it now
-            mode = Mode::Idle;
-            goal = Goal::Nav { pos: d.0, arrive: d.1 + 6.0 };
         } else if let Some(tr) = tgt.as_ref().filter(|_| !farm || self.choose_hunt(obs, world, &zi, hpf, hunt_near, muzzle).is_none()) {
             mode = Mode::Fight;
             let tp = tr.pos_at(t);
@@ -294,18 +305,9 @@ impl Brain {
             } else if t - self.no_los.1 > p.no_los_drop_s * if self.finish_bonus(tr) > 0.0 { p.finish_chase_mult } else { 1.0 } {
                 self.mem.ban(tr.id, t + 8.0);
             }
-            let (base, far) = self.pref_range(obs, tr, hpf);
-            let pref = self.gear_range(obs, tr, base);
-            self.stand_off = far && pref >= base;
-            let hold = p.hold_hunter > 0.0 && !los && self.holds_for(obs, tr);
-            let g0 = if los {
-                Goal::Range { pos: tp, pref }
-            } else if hold {
-                // wait where we are while it closes in, back off once it is nearer than the preferred distance
-                Goal::Range { pos: tp, pref: pref.max(dist2(tp, pos)) }
-            } else {
-                Goal::Nav { pos: tp, arrive: (pref * 0.5).max(15.0) }
-            };
+            let pref = self.gear_range(obs, tr, self.pref_range(obs, tr, hpf));
+            let pref = if p.tk_on >= 0.5 { pref.min(p.tk_range) } else { pref };
+            let g0 = if los { Goal::Range { pos: tp, pref } } else { Goal::Nav { pos: tp, arrive: (pref * 0.5).max(15.0) } };
             if self.p.sv_spot > 0.0 {
                 self.mode = Mode::Fight;
             }
@@ -342,6 +344,9 @@ impl Brain {
         if goal_id != self.goal_id {
             self.pursuit = (goal_id, t);
         }
+        if mode != Mode::Hunt {
+            self.vx.seeking = false;
+        }
         self.mode = mode;
         self.goal = goal;
         self.goal_id = goal_id;
@@ -355,14 +360,12 @@ impl Brain {
         let pos = obs.me.pos;
         let z = &obs.zone;
         let gate = self.gate_closed(obs);
-        // a stand-off distance near the old engagement limit must not drop the target
-        let engage = if p.mx_on > 0.0 { p.engage_range.max(p.mx_max + p.range_band + 4.0) } else { p.engage_range };
         let mut best: Option<(f64, &Track)> = None;
         for tr in &self.mem.tracks {
             if tr.kind != ActorKind::Mech || t - tr.last_seen > p.target_memory_s {
                 continue;
             }
-            if gate && self.spare(tr.hp, tr.max_hp) {
+            if gate && self.spare_tr(tr, t, pos) {
                 continue;
             }
             let tp = tr.pos_at(t);
@@ -374,7 +377,7 @@ impl Brain {
             if !self.sq_allow(obs, tr) || self.sf_hold(obs, tr) {
                 continue;
             }
-            if d > engage && !attacker {
+            if d > p.engage_range && !attacker {
                 continue;
             }
             if !self.ffa_allow(obs, tr, attacker, d) {
@@ -399,6 +402,7 @@ impl Brain {
             if self.ffa_end_rival(obs, tr) {
                 s += p.ffa_end_bonus;
             }
+            s += self.tk_bonus(tr);
             if t - tr.last_seen < p.fresh_s {
                 s += 30.0;
             }
@@ -409,8 +413,7 @@ impl Brain {
         best.map(|b| b.1.clone())
     }
 
-    /// Preferred distance to the target, and whether the engagement model moved it beyond the legacy one.
-    fn pref_range(&self, obs: &Obs, tr: &Track, hpf: f64) -> (f64, bool) {
+    fn pref_range(&self, obs: &Obs, tr: &Track, hpf: f64) -> f64 {
         let p = &self.p;
         let me = &obs.me;
         let has = |k: WeaponKind| me.weapons.iter().flatten().any(|w| w.kind == k);
@@ -420,46 +423,12 @@ impl Brain {
         } else if has(WeaponKind::Mortar) && !has(WeaponKind::Gun) {
             pref = p.range_mortar;
         }
-        let mut far = false;
-        if p.mx_on > 0.0 {
-            let d = self.exchange_range(obs, tr, hpf, pref);
-            far = d > pref + 1.0;
-            pref = d;
-        }
         if has(WeaponKind::Lightning) && me.energy > 35.0 && hpf > p.lightning_rush_hp && (p.rush_solo <= 0.0 || self.rush_ok(obs, tr)) {
             pref = p.range_lightning;
-            far = false;
         } else if tr.has(WeaponKind::Lightning) {
             pref = pref.max(p.range_vs_lightning);
         }
-        (pref, far)
-    }
-
-    /// Engagement distance from the expected exchange with the target and the other mechs shooting at us.
-    fn exchange_range(&self, obs: &Obs, tr: &Track, hpf: f64, legacy: f64) -> f64 {
-        let p = &self.p;
-        let me = &obs.me;
-        let t = obs.t;
-        let has = |k: WeaponKind| me.weapons.iter().flatten().any(|w| w.kind == k);
-        let rush = has(WeaponKind::Lightning) && me.energy > 35.0 && hpf > p.lightning_rush_hp && (p.rush_solo <= 0.0 || self.rush_ok(obs, tr));
-        let us = Loadout { gun: has(WeaponKind::Gun), laser: has(WeaponKind::Laser), lightning: rush };
-        let of = |x: &Track| Loadout { gun: x.has(WeaponKind::Gun) || x.weapons.is_empty(), laser: x.has(WeaponKind::Laser), lightning: x.has(WeaponKind::Lightning) };
-        let others: Vec<Loadout> = self.mem.tracks.iter().filter(|x| x.kind == ActorKind::Mech && x.id != tr.id && t - x.last_dmg_t < 5.0).take(6).map(of).collect();
-        let max = p.mx_max.min(self.cfg.vision.range + me.stats.vision_bonus - 15.0);
-        let d = duel::best_range(us, of(tr), &others, self.squad_mode(), legacy, p.mx_min, max, p.mx_kappa);
-        if d.is_finite() {
-            d
-        } else {
-            legacy
-        }
-    }
-
-    /// The target is coming for us and we can wait for it with a laser instead of walking up to it.
-    fn holds_for(&self, obs: &Obs, tr: &Track) -> bool {
-        let t = obs.t;
-        let laser = obs.me.weapons.iter().flatten().any(|w| w.kind == WeaponKind::Laser);
-        let hunting = self.order.came_at(tr.id, t, 8.0) || t - tr.last_dmg_t < 8.0;
-        laser && hunting && frac(tr.hp, tr.max_hp) >= self.p.finish_hp
+        pref
     }
 
     pub(crate) fn in_play_pub(&self, obs: &Obs, zi: &ZoneInfo, q: V3, d: f64) -> bool {
@@ -502,7 +471,7 @@ impl Brain {
                 best = Some((s, LootPick { id: it.id, pos: it.pos, quick: d < p.loot_quick && empty }));
             }
         }
-        if me.cubes < self.cube_cap() {
+        if me.cubes < self.cfg.cubes.stat_cap {
             for it in &self.mem.cubes {
                 if self.mem.blacklisted(it.id, t) {
                     continue;
@@ -559,7 +528,7 @@ impl Brain {
         if hpf < p.hunt_min_hp || near_mech < safe {
             return None;
         }
-        let more_cubes = me.cubes < self.cube_cap();
+        let more_cubes = me.cubes < self.cfg.cubes.stat_cap;
         let empty_slot = me.weapons.iter().any(|w| w.is_none());
         let mut best: Option<(f64, Tgt, Goal, i64)> = None;
         if more_cubes {
@@ -667,8 +636,9 @@ impl Brain {
             consider(c, 10.0, &mut best);
         }
         consider(pos, 6.0, &mut best);
+        let t_act = self.t_act;
         for &r in &[12.0, 24.0, 40.0, 60.0] {
-            if self.spent_ms() > 10.0 {
+            if t_act.elapsed().as_secs_f64() > 0.010 {
                 break;
             }
             for k in 0..12 {

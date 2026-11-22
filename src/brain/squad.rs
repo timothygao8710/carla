@@ -45,10 +45,19 @@ impl Brain {
             Some((q, tf, _)) => t - tf > 0.5 && dist(*q, pos) > 4.0 || t - tf > 2.0,
             None => true,
         };
-        if rebuild && self.spent_ms() < 4.0 {
-            let f = nav.field_limited(&[(pos, 0.0)], -1.0, p.sq_eta_range);
-            self.sq.field = Some((pos, t, Arc::new(f)));
+        if let Some((k, tk, f)) = super::fieldsvc::poll(&mut self.fsvc.sq) {
+            self.sq.field = Some(([k[0], k[1], k[2]], tk, Arc::new(f)));
         }
+        let rebuild = rebuild && self.sq.field.as_ref().map_or(true, |(q, tf, _)| t - tf > 0.5 && dist(*q, pos) > 4.0 || t - tf > 2.0);
+        if rebuild && self.spent_ms() < 4.0 {
+            let budget = self.budget;
+            let shared = self.shared.clone();
+            let rng = p.sq_eta_range;
+            if let Some(f) = super::fieldsvc::request(&mut self.fsvc, 2, &shared, [pos[0], pos[1], pos[2], 0.0], 4.0, t, &budget, 14.0, move |nav| nav.field_limited(&[(pos, 0.0)], -1.0, rng)) {
+                self.sq.field = Some((pos, t, Arc::new(f)));
+            }
+        }
+        let _ = nav;
         let walk = obs.me.stats.walk_speed.max(1.0);
         let mut shooters = 0;
         for tr in &self.mem.tracks {

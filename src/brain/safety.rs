@@ -80,6 +80,9 @@ impl Brain {
     }
 
     pub(crate) fn sf_hold(&self, obs: &Obs, tr: &Track) -> bool {
+        if self.es_hold(obs, tr) {
+            return true;
+        }
         let p = &self.p;
         if p.sf_nofirst < 0.5 || tr.kind != ActorKind::Mech || Self::sf_has_laser(obs) {
             return false;
