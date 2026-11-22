@@ -83,11 +83,13 @@ impl Brain {
         }
         let w = &self.cfg.weapons;
         let mut s = 0.0;
+        let model = p.thr_model > 0.0;
+        let squad = model && self.squad_mode();
         if th.gun && d < w.gun.range {
-            s += p.gun_dps * (1.15 - d / 220.0).clamp(0.2, 1.0);
+            s += if model { p.gun_dps * super::duel::gun_hit(squad, d) } else { p.gun_dps * (1.15 - d / 220.0).clamp(0.2, 1.0) };
         }
         if th.laser && d < w.laser.range {
-            s += p.laser_dps;
+            s += if model { p.laser_dps * super::duel::laser_hit(squad, d) / super::duel::LASER_REF } else { p.laser_dps };
         }
         if th.lightning && d < w.lightning.range + 6.0 {
             s += p.lightning_dps;
@@ -312,9 +314,6 @@ impl Brain {
             arrive = a;
             let calm = self.roof_jet || (t - self.mem.last_damage_t > 3.0 && !matches!(self.mode, Mode::Fight | Mode::Retreat));
             let jet_e = if calm { me.max_energy * 0.8 } else { -1.0 };
-            if let Some((k, tk, f)) = super::fieldsvc::poll(&mut self.fsvc.nav) {
-                self.field = Some(([k[0], k[1], k[2]], std::sync::Arc::new(f), tk));
-            }
             let need = match &self.field {
                 Some((fg, f, tb)) => {
                     let moved = dist(*fg, g);
@@ -325,11 +324,7 @@ impl Brain {
             if need && budget.remaining_ms() > p.field_min_budget_ms && (self.field.is_none() || self.spent_ms() < 8.0) {
                 let sg = nav.snap(g).filter(|q| q.iter().all(|x| x.is_finite())).unwrap_or(g);
                 let lim = dist2(pos, sg) * 2.0 + 120.0;
-                let shared = self.shared.clone();
-                let tol = p.field_regoal.max(0.0);
-                if let Some(f) = super::fieldsvc::request(&mut self.fsvc, 1, &shared, [g[0], g[1], g[2], jet_e], tol, t, budget, 10.0, move |nav| nav.field_limited(&[(sg, 0.0)], jet_e, lim)) {
-                    self.field = Some((g, std::sync::Arc::new(f), t));
-                }
+                self.field = Some((g, std::sync::Arc::new(nav.field_limited(&[(sg, 0.0)], jet_e, lim)), t));
             }
             if let Some((fg, f, _)) = &self.field {
                 let stale = dist(*fg, g);
@@ -416,7 +411,7 @@ impl Brain {
         // juke axis
         let mut juke: Option<V2> = None;
         for th in &threats {
-            if th.ghost || !th.los_now || !(th.gun || th.mortar) || th.dist < p.juke_min_dist {
+            if th.ghost || !th.los_now || !(th.gun || th.mortar) || th.dist < p.juke_min_dist || (p.juke_max_dist > 0.0 && th.dist > p.juke_max_dist) {
                 continue;
             }
             let to_us = (center[1] - th.eye[1]).atan2(center[0] - th.eye[0]);
@@ -469,7 +464,13 @@ impl Brain {
         } else {
             p.energy_reserve
         };
-        let allow_boost = me.grounded && me.energy > reserve && (matches!(self.mode, Mode::Zone | Mode::Retreat | Mode::Drop | Mode::Roof) || under_fire || !me.in_zone);
+        let kite_boost = self.stand_off
+            && p.mx_boost > 0.0
+            && match self.goal {
+                Goal::Range { pos: g, pref } => dist2(pos, g) < pref - p.range_band - p.mx_boost,
+                _ => false,
+            };
+        let allow_boost = me.grounded && me.energy > reserve && (matches!(self.mode, Mode::Zone | Mode::Retreat | Mode::Drop | Mode::Roof) || under_fire || !me.in_zone || kite_boost);
         let slow = if fc.charging { st.charge_move_mult.clamp(0.1, 1.0) } else { 1.0 };
 
         // candidates
@@ -528,7 +529,9 @@ impl Brain {
                 Goal::Range { pos: g, pref } => {
                     let e0 = ((dist2(pos, g) - pref).abs() - p.range_band).max(0.0);
                     let e1 = ((dist2(end, g) - pref).abs() - p.range_band).max(0.0);
-                    s += p.w_range * (e0 - e1);
+                    // opening the distance comes before the side step while the target is inside the stand-off distance
+                    let wr = if self.stand_off && dist2(pos, g) < pref - p.range_band { p.w_range * p.mx_w_back } else { p.w_range };
+                    s += wr * (e0 - e1);
                 }
                 Goal::None => {
                     s -= 0.6 * dist2(end, pos);
