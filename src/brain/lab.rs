@@ -9,7 +9,7 @@ use super::math::*;
 use super::{Brain, Params};
 use crate::nav::Field;
 use crate::physics::{self, Body, Drive};
-use crate::proto::{ActorKind, ActorObs, Config, DamagedEv, Event, Hello, HitEv, KillEv, Obs, ProjKind, ProjectileObs, WeaponKind, WeaponObs, WeaponStats, ZoneObs};
+use crate::proto::{ActorKind, ActorObs, Config, DamagedEv, DropEv, DropObs, Event, Hello, HitEv, KillEv, Obs, ProjKind, ProjectileObs, WeaponKind, WeaponObs, WeaponStats, ZoneObs};
 use crate::runtime::Budget;
 use crate::Shared;
 
@@ -91,6 +91,7 @@ pub(crate) struct Stats {
     pub boost_s: f64,
     pub air_s: f64,
     pub died_at: Option<f64>,
+    pub drops: u32,
     pub hash: u64,
 }
 
@@ -116,6 +117,7 @@ impl Stats {
         self.dist_n += o.dist_n;
         self.boost_s += o.boost_s;
         self.air_s += o.air_s;
+        self.drops += o.drops;
         self.hash = self.hash.rotate_left(7) ^ o.hash;
     }
 }
@@ -139,6 +141,8 @@ pub(crate) struct Lab {
     pub warmup: f64,
     pub st: Stats,
     pub zone: ZoneObs,
+    /// Supply drop: position, landing time, capture progress.
+    pub drop: Option<(V3, f64, f64)>,
     shots: Vec<Shot>,
     hist: VecDeque<(V3, V3)>,
     events: Vec<Event>,
@@ -227,6 +231,7 @@ impl Lab {
             warmup: 6.0,
             st: Stats { hash: FNV0, ..Default::default() },
             zone,
+            drop: None,
             shots: Vec::new(),
             hist: VecDeque::new(),
             events: Vec::new(),
@@ -325,6 +330,9 @@ impl Lab {
             if s.by != 0 && self.sees(eye, yaw, s.pos) {
                 o.projectiles.push(ProjectileObs { id: s.id, kind: ProjKind::Gun, pos: s.pos, vel: s.vel });
             }
+        }
+        if let Some((q, lands, prog)) = self.drop {
+            o.drops.push(DropObs { id: 20000, pos: q, radius: 8.0, lands_in: (lands - t).max(0.0), capture_s: 4.0, progress: prog, holder: if prog > 0.0 { Some(0) } else { None } });
         }
         o.events = std::mem::take(&mut self.events);
         o.zone = self.zone.clone();
@@ -690,6 +698,20 @@ impl Lab {
             self.shots_tick(me_prev, &foe_prev);
             if self.mortal && t - self.last_hurt >= m.regen_delay && self.hp > 0.0 {
                 self.hp = (self.hp + m.regen_per_s * DT).min(self.max_hp);
+            }
+            if let Some((q, lands, prog)) = self.drop {
+                let inside = |p: V3| dist2(p, q) <= 8.0 && (p[2] - q[2]).abs() < 6.0;
+                let others = self.foes.iter().any(|f| f.alive && inside(f.body.pos));
+                let np = if t >= lands && inside(self.body.pos) && !others { prog + DT } else if others && inside(self.body.pos) { prog } else { 0.0 };
+                if np >= 4.0 {
+                    self.hp = self.max_hp;
+                    self.body.energy = m.energy;
+                    self.events.push(Event::Drop(DropEv { id: 20000, cubes: 3.0 }));
+                    self.st.drops += 1;
+                    self.drop = None;
+                } else {
+                    self.drop = Some((q, lands, np));
+                }
             }
             self.hist.push_back((self.body.pos, self.body.vel));
             while self.hist.len() > 8 {

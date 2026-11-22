@@ -269,6 +269,10 @@ fn pack(shared: Arc<Shared>, params: &Params, seed: i64, n: usize, secs: f64) ->
     lab.zone.radius = 380.0;
     lab.zone.next_radius = 380.0;
     let bearing = rng.range(0.0, std::f64::consts::TAU);
+    if let Some(lands) = std::env::var("LAB_DROP").ok().and_then(|v| v.parse::<f64>().ok()) {
+        let q = spot(&mut rng, start, 40.0, 100.0, bearing + std::f64::consts::PI, 1.0);
+        lab.drop = Some((q, lands, 0.0));
+    }
     for k in 0..n {
         let q = spot(&mut rng, start, 190.0 + 25.0 * k as f64, 230.0 + 25.0 * k as f64, bearing, 0.35);
         lab.add_foe(q, Script::Hunter { sg: 0.06, sl: 0.1, pref: 70.0 }, true);
@@ -298,10 +302,11 @@ fn lab_pack() {
             tot.add(&s);
         }
         eprintln!(
-            "{name:14} kills {:4.2} life {:5.1}s alive at end {:2}/{runs} | dealt/taken {:4.2} dealt {:5.0} | their gun {:3.0}% laser {:3.0}% | our laser hit {:3.0}% gun hit {:3.0}% | dist {:4.0} m boost {:2.0}%",
+            "{name:14} kills {:4.2} life {:5.1}s alive at end {:2}/{runs} drops {:2} | dealt/taken {:4.2} dealt {:5.0} | their gun {:3.0}% laser {:3.0}% | our laser hit {:3.0}% gun hit {:3.0}% | dist {:4.0} m boost {:2.0}%",
             tot.kills as f64 / runs as f64,
             life / runs as f64,
             wins,
+            tot.drops,
             tot.dmg_dealt / tot.dmg_taken.max(1.0),
             tot.dmg_dealt / runs as f64,
             pct(tot.hits_on_us, tot.shots_at_us),

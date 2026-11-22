@@ -238,6 +238,10 @@ impl Brain {
         } else if zi.urgent {
             mode = Mode::Zone;
             goal = Goal::Field { center: obs.zone.next_center, arrive: 1.5 };
+        } else if let Some(d) = drop.filter(|d| p.drop_heal > 0.0 && hpf < p.drop_heal && d.2 < p.drop_heal_dist && (want_retreat || tgt.is_some())) {
+            // a supply drop repairs in full: hurt, it comes before cover and before the fight
+            mode = Mode::Drop;
+            goal = Goal::Nav { pos: d.0, arrive: (d.1 * 0.3).max(1.0) };
         } else if let Some((id, gp)) = gearg.filter(|_| want_retreat || avoid) {
             mode = Mode::Loot;
             goal = Goal::Nav { pos: gp, arrive: 1.0 };
