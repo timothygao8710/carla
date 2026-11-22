@@ -7,7 +7,9 @@ RUN cargo build --release --locked \
 FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 COPY --from=build --chmod=0755 /automata /usr/local/bin/automata
 COPY --chmod=0644 bot.json /bot.json
+COPY --chmod=0755 app /app
+COPY --chmod=0644 NOTICE /NOTICE
 ENV MECH_PARAMS=/bot.json
 USER 65534:65534
 WORKDIR /tmp
-ENTRYPOINT ["/usr/local/bin/automata"]
+ENTRYPOINT ["/app"]
