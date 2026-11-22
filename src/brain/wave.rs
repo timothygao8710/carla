@@ -9,12 +9,11 @@ pub(crate) struct WaveState {
     pub prep: Option<(V3, f64)>,
     pub next_eval: f64,
     pub k: u32,
-    pub last_kill_t: f64,
 }
 
 impl WaveState {
     pub fn new() -> WaveState {
-        WaveState { kills: 0, prep: None, next_eval: 0.0, k: 0, last_kill_t: 0.0 }
+        WaveState { kills: 0, prep: None, next_eval: 0.0, k: 0 }
     }
 }
 
@@ -23,22 +22,18 @@ impl Brain {
         for ev in &obs.events {
             if let Event::Kill(_) = ev {
                 self.wave.kills += 1;
-                self.wave.last_kill_t = obs.t;
             }
         }
     }
 
     fn wave_armed(&self) -> bool {
-        if self.p.ready_once > 0.5 {
-            return self.p.ready_kill >= 1.0 && (self.wave.kills as f64) == self.p.ready_kill - 1.0 && self.squad_mode();
-        }
         self.p.ready_kill >= 1.0 && (self.wave.kills as f64) >= self.p.ready_kill - 1.0
     }
 
     pub(crate) fn ready(&self, obs: &Obs) -> bool {
         let p = &self.p;
         let me = &obs.me;
-        if obs.t >= p.ready_deadline || (p.ready_once > 0.5 && obs.t >= self.wave.last_kill_t + p.ready_wait) {
+        if obs.t >= p.ready_deadline {
             return true;
         }
         if me.cubes < p.ready_cubes.min(self.cfg.cubes.stat_cap.max(1.0)) || frac(me.hp, me.max_hp) < p.ready_hp {

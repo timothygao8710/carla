@@ -74,8 +74,7 @@ impl Brain {
     pub(crate) fn want_rest(&mut self, obs: &Obs, zi: &ZoneInfo, n_att: usize, near_mech: f64, hpf: f64) -> bool {
         let p = &self.p;
         let t = obs.t;
-        let on = p.rest_on || (p.rest_after_k >= 1.0 && self.wave.kills as f64 >= p.rest_after_k && self.squad_mode());
-        let ok = on && !zi.urgent && n_att == 0 && t - self.mem.last_damage_t > 1.0 && near_mech > p.rest_near;
+        let ok = p.rest_on && !zi.urgent && n_att == 0 && t - self.mem.last_damage_t > 1.0 && near_mech > p.rest_near;
         let r = if self.econ.resting { ok && hpf < p.rest_exit_hp } else { ok && hpf < p.rest_hp };
         self.econ.resting = r;
         r

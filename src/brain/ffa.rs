@@ -133,7 +133,7 @@ impl Ffa {
 
 impl Brain {
     pub(crate) fn ffa_passive(&self, obs: &Obs) -> bool {
-        self.p.ffa_on > 0.5 && self.ffa.on && (obs.alive as f64) > self.p.ffa_fair_alive && obs.t < self.p.ffa_end_t
+        self.ffa.on && (obs.alive as f64) > self.p.ffa_fair_alive && obs.t < self.p.ffa_end_t
     }
 
     pub(crate) fn ffa_end_rival(&self, obs: &Obs, tr: &Track) -> bool {
@@ -171,7 +171,7 @@ impl Brain {
         if attacker || self.target == super::Tgt::Mech(tr.id) || d < 60.0 {
             return true;
         }
-        if !(self.ffa.on && self.p.ffa_on > 0.5) {
+        if !self.ffa.on {
             return self.p.ffa_early_quiet_range <= 0.0 || obs.t >= 75.0 || d < self.p.ffa_early_quiet_range;
         }
         if !self.ffa_passive(obs) {

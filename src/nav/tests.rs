@@ -20,10 +20,6 @@ fn map_dir() -> Option<std::path::PathBuf> {
         c.push(std::path::PathBuf::from(p));
     }
     c.push(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../kit/arena"));
-    c.push(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mechfight-kit/arena"));
-    if let Ok(p) = std::env::var("MECH_MAP") {
-        c.insert(0, std::path::PathBuf::from(p));
-    }
     c.push(std::path::PathBuf::from("/arena"));
     c.into_iter().find(|p| p.join("v2/world.json").exists())
 }
