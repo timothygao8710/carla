@@ -499,6 +499,12 @@ impl Brain {
             Mode::Drop => p.w_progress_drop,
             Mode::Fight => p.w_progress_fight,
         };
+        let full_r = self.cfg.cubes.pickup_radius + 1.0;
+        let avoid: Vec<V3> = if p.cube_avoid > 0.0 && me.cubes >= p.cube_avoid {
+            self.mem.cubes.iter().filter(|c| dist2(c.pos, pos) < 30.0 && (c.pos[2] - pos[2]).abs() < 6.0).map(|c| c.pos).collect()
+        } else {
+            Vec::new()
+        };
         let (zc, zr) = zone_at(&obs.zone, t, t + horizon, self.zone_b);
         let z = &obs.zone;
         let next_soon = z.shrink_start - t < 15.0;
@@ -571,6 +577,11 @@ impl Brain {
                 let d = dist(*q, end);
                 if d < p.npc_avoid {
                     s -= p.w_npc * (p.npc_avoid - d) * 0.2 + p.w_npc * (dist(*q, pos) - d).max(0.0);
+                }
+            }
+            for q in &avoid {
+                if c.pts.iter().any(|pt| dist2(*pt, *q) < full_r && (pt[2] - q[2]).abs() < 4.5) {
+                    s -= p.w_cube_avoid;
                 }
             }
             s -= p.w_proj * self.incoming_cost(c, &shots, &blasts, radius, height);
