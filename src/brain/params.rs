@@ -205,9 +205,6 @@ pub struct Params {
     /// the kill gate applies to the gated kill only, and opens ready_wait s after the previous kill
     pub ready_once: f64,
     pub ready_wait: f64,
-    /// at this many cubes or more, stop collecting and step around cubes (each one only makes the mech bigger)
-    pub cube_avoid: f64,
-    pub w_cube_avoid: f64,
     pub finish_hp: f64,
     pub finish_bonus: f64,
     pub finish_chase_mult: f64,
@@ -615,8 +612,6 @@ impl Default for Params {
             rest_after_k: 0.0,
             ready_once: 0.0,
             ready_wait: 30.0,
-            cube_avoid: 0.0,
-            w_cube_avoid: 30.0,
             gear_on: 0.0,
             gear_harmless_dmg: 150.0,
             gear_laser_threat_r: 170.0,

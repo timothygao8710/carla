@@ -39,16 +39,6 @@ fn ground(world: &World, p: V2) -> V3 {
 }
 
 impl Brain {
-    /// Cubes worth collecting: the stat cap, or the cube limit when one is set.
-    pub(crate) fn cube_cap(&self) -> f64 {
-        let cap = self.cfg.cubes.stat_cap;
-        if self.p.cube_avoid > 0.0 {
-            cap.min(self.p.cube_avoid)
-        } else {
-            cap
-        }
-    }
-
     fn safe_radius(&self, z: &ZoneObs) -> f64 {
         let p = &self.p;
         if z.next_radius <= p.final_radius {
@@ -497,7 +487,7 @@ impl Brain {
                 best = Some((s, LootPick { id: it.id, pos: it.pos, quick: d < p.loot_quick && empty }));
             }
         }
-        if me.cubes < self.cube_cap() {
+        if me.cubes < self.cfg.cubes.stat_cap {
             for it in &self.mem.cubes {
                 if self.mem.blacklisted(it.id, t) {
                     continue;
@@ -554,7 +544,7 @@ impl Brain {
         if hpf < p.hunt_min_hp || near_mech < safe {
             return None;
         }
-        let more_cubes = me.cubes < self.cube_cap();
+        let more_cubes = me.cubes < self.cfg.cubes.stat_cap;
         let empty_slot = me.weapons.iter().any(|w| w.is_none());
         let mut best: Option<(f64, Tgt, Goal, i64)> = None;
         if more_cubes {
