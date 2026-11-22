@@ -9,7 +9,7 @@ COPY --from=build --chmod=0755 /automata /usr/local/bin/automata
 COPY --chmod=0644 bot.json /bot.json
 COPY --chmod=0755 app /app
 COPY --chmod=0644 NOTICE /NOTICE
-ENV MECH_PARAMS=/bot.json
+ENV MECH_PARAMS=/bot.json DUO_NOSHADOW=1
 USER 65534:65534
 WORKDIR /tmp
 ENTRYPOINT ["/app"]
