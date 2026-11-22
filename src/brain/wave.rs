@@ -9,11 +9,12 @@ pub(crate) struct WaveState {
     pub prep: Option<(V3, f64)>,
     pub next_eval: f64,
     pub k: u32,
+    pub last_kill_t: f64,
 }
 
 impl WaveState {
     pub fn new() -> WaveState {
-        WaveState { kills: 0, prep: None, next_eval: 0.0, k: 0 }
+        WaveState { kills: 0, prep: None, next_eval: 0.0, k: 0, last_kill_t: 0.0 }
     }
 }
 
@@ -22,24 +23,25 @@ impl Brain {
         for ev in &obs.events {
             if let Event::Kill(_) = ev {
                 self.wave.kills += 1;
+                self.wave.last_kill_t = obs.t;
             }
         }
     }
 
     fn wave_armed(&self) -> bool {
-        self.p.ready_kill >= 1.0 && (self.wave.kills as f64) >= self.p.ready_kill - 1.0 && (self.p.ready_only < 0.5 || (self.wave.kills as f64) < self.p.ready_kill)
+        if self.p.ready_once > 0.5 {
+            return self.p.ready_kill >= 1.0 && (self.wave.kills as f64) == self.p.ready_kill - 1.0 && self.squad_mode();
+        }
+        self.p.ready_kill >= 1.0 && (self.wave.kills as f64) >= self.p.ready_kill - 1.0
     }
 
     pub(crate) fn ready(&self, obs: &Obs) -> bool {
         let p = &self.p;
         let me = &obs.me;
-        if obs.t >= p.ready_deadline {
+        if obs.t >= p.ready_deadline || (p.ready_once > 0.5 && obs.t >= self.wave.last_kill_t + p.ready_wait) {
             return true;
         }
         if me.cubes < p.ready_cubes.min(self.cfg.cubes.stat_cap.max(1.0)) || frac(me.hp, me.max_hp) < p.ready_hp {
-            return false;
-        }
-        if p.ready_laser > 0.5 && !me.weapons.iter().flatten().any(|w| w.kind == crate::proto::WeaponKind::Laser) {
             return false;
         }
         if p.ready_second > 0.0 && me.weapons.iter().any(|w| w.is_none()) {
@@ -88,6 +90,25 @@ impl Brain {
         seen / (n as f64 * 1.7)
     }
 
+    /// Share of long sight lines from a spot: an open spot lets the laser work on hunters while they cross open ground.
+    fn sightlines(&self, world: &World, q: V3, h: f64) -> f64 {
+        let n = 16;
+        let mut seen = 0.0;
+        let e = up(q, self.cfg.mech.eye_height.min(h));
+        for k in 0..n {
+            let a = k as f64 * std::f64::consts::TAU / n as f64;
+            for (r, w) in [(110.0, 1.0), (170.0, 1.0)] {
+                let x = q[0] + r * a.cos();
+                let y = q[1] + r * a.sin();
+                let z = fin(world.terrain_z(x, y), q[2]);
+                if world.ray(e, [x, y, z + h * 0.6]).is_none() {
+                    seen += w;
+                }
+            }
+        }
+        seen / (n as f64 * 2.0)
+    }
+
     pub(crate) fn wave_update(&mut self, obs: &Obs, world: &World, nav: &Nav) {
         if self.p.prep_pos <= 0.0 {
             return;
@@ -127,7 +148,7 @@ impl Brain {
             if dist(q, q0) > 4.0 || !q.iter().all(|v| v.is_finite()) || q[2] > q0[2] + 2.0 {
                 continue;
             }
-            let ex = self.exposure(world, q, h);
+            let ex = if self.p.prep_open > 0.0 { 1.0 - self.sightlines(world, q, h) } else { self.exposure(world, q, h) };
             let dz = dist2v(q, z.next_center) / z.next_radius.max(1.0);
             let s = ex + 0.15 * dz + 0.0015 * dist(q, me.pos);
             if self.wave.prep.map_or(true, |(_, ps)| s < ps - 0.03) {

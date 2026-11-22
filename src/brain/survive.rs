@@ -20,6 +20,8 @@ impl Brain {
         let pos = obs.me.pos;
         let p = &self.p;
         let mut v: Vec<Foe> = Vec::new();
+        let model = p.thr_model > 0.0;
+        let squad = model && self.squad_mode();
         for tr in &self.mem.tracks {
             if tr.kind != ActorKind::Mech || t - tr.last_seen > p.sv_memory_s {
                 continue;
@@ -34,11 +36,11 @@ impl Brain {
             let mut w = 0.0;
             let gun = tr.has(WeaponKind::Gun) || tr.weapons.is_empty();
             if gun && d < self.cfg.weapons.gun.range {
-                w += p.gun_dps * (1.15 - d / 220.0).clamp(0.2, 1.0);
+                w += if model { p.gun_dps * super::duel::gun_hit(squad, d) } else { p.gun_dps * (1.15 - d / 220.0).clamp(0.2, 1.0) };
             }
             let laser = tr.has(WeaponKind::Laser) && d < self.cfg.weapons.laser.range;
             if laser {
-                w += p.laser_dps * p.sv_laser_mult;
+                w += if model { p.laser_dps * p.sv_laser_mult * super::duel::laser_hit(squad, d) / super::duel::LASER_REF } else { p.laser_dps * p.sv_laser_mult };
             }
             if tr.has(WeaponKind::Lightning) && d < self.cfg.weapons.lightning.range + 10.0 {
                 w += p.lightning_dps;

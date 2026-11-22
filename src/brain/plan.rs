@@ -15,8 +15,6 @@ pub(crate) struct MoveOut {
 }
 
 struct Threat {
-    id: i64,
-    since: f64,
     eye: V3,
     aim_yaw: f64,
     gun: bool,
@@ -31,7 +29,6 @@ struct Threat {
 }
 
 struct Shot {
-    npc: bool,
     p: V3,
     v: V3,
     dmg: f64,
@@ -54,8 +51,6 @@ struct Cand {
     pts: Vec<V3>,
     blocked: f64,
     score: f64,
-    hid: bool,
-    zout: f64,
 }
 
 const DT: f64 = 0.1;
@@ -88,11 +83,13 @@ impl Brain {
         }
         let w = &self.cfg.weapons;
         let mut s = 0.0;
+        let model = p.thr_model > 0.0;
+        let squad = model && self.squad_mode();
         if th.gun && d < w.gun.range {
-            s += p.gun_dps * (1.15 - d / 220.0).clamp(0.2, 1.0);
+            s += if model { p.gun_dps * super::duel::gun_hit(squad, d) } else { p.gun_dps * (1.15 - d / 220.0).clamp(0.2, 1.0) };
         }
         if th.laser && d < w.laser.range {
-            s += p.laser_dps;
+            s += if model { p.laser_dps * super::duel::laser_hit(squad, d) / super::duel::LASER_REF } else { p.laser_dps };
         }
         if th.lightning && d < w.lightning.range + 6.0 {
             s += p.lightning_dps;
@@ -115,8 +112,6 @@ impl Brain {
             let fresh = t - tr.last_seen < self.p.fresh_s;
             let charge_left = if tr.charging && fresh { Some((self.cfg.weapons.laser.charge - (t - tr.charge_since)).clamp(0.1, 0.8)) } else { None };
             v.push(Threat {
-                id: tr.id,
-                since: tr.charge_since,
                 eye: up(tp, self.cfg.mech.eye_height * s),
                 aim_yaw: tr.aim[0],
                 gun: tr.has(WeaponKind::Gun) || tr.weapons.is_empty(),
@@ -136,7 +131,7 @@ impl Brain {
                 let q = [u.from[0] + u.bearing.cos() * r, u.from[1] + u.bearing.sin() * r, u.from[2] + self.cfg.mech.eye_height];
                 let explained = v.iter().any(|th| th.dist < 250.0 && adiff((th.eye[1] - center[1]).atan2(th.eye[0] - center[0]), u.bearing).abs() < 0.35);
                 if !explained {
-                    v.push(Threat { id: -1, since: 0.0, eye: q, aim_yaw: wrap(u.bearing + std::f64::consts::PI), gun: true, laser: u.laser, lightning: false, mortar: false, ghost: true, is_target: false, charge_left: None, los_now: false, dist: r });
+                    v.push(Threat { eye: q, aim_yaw: wrap(u.bearing + std::f64::consts::PI), gun: true, laser: u.laser, lightning: false, mortar: false, ghost: true, is_target: false, charge_left: None, los_now: false, dist: r });
                 }
             }
         }
@@ -182,7 +177,7 @@ impl Brain {
                     continue;
                 }
                 let (dmg, r) = if pr.kind == ProjKind::Npc { (self.cfg.npc.damage, self.cfg.projectile.npc_radius) } else { (self.cfg.weapons.gun.damage, self.cfg.projectile.gun_radius) };
-                shots.push(Shot { npc: pr.kind == ProjKind::Npc, p: pr.pos, v: pr.vel, dmg, r });
+                shots.push(Shot { p: pr.pos, v: pr.vel, dmg, r });
             }
         }
         (shots, blasts)
@@ -295,7 +290,7 @@ impl Brain {
                     d0 = Some(d);
                     let stp = nav.step(f, pos);
                     if let Some(s) = stp {
-                        if s.kind == crate::nav::EDGE_JET && me.grounded && !(p.dg_nojet >= 2.0 && t - self.dg.active_t < 0.25 && matches!(self.mode, Mode::Fight | Mode::Idle)) && me.energy >= s.energy + 8.0 && dist2(pos, s.target) < 14.0 {
+                        if s.kind == crate::nav::EDGE_JET && me.grounded && me.energy >= s.energy + 8.0 && dist2(pos, s.target) < 14.0 {
                             self.jet = Some((s.target, t));
                             let dd = unit2(s.target[0] - pos[0], s.target[1] - pos[1]);
                             self.last_dir = dd;
@@ -319,9 +314,6 @@ impl Brain {
             arrive = a;
             let calm = self.roof_jet || (t - self.mem.last_damage_t > 3.0 && !matches!(self.mode, Mode::Fight | Mode::Retreat));
             let jet_e = if calm { me.max_energy * 0.8 } else { -1.0 };
-            if let Some((k, tk, f)) = super::fieldsvc::poll(&mut self.fsvc.nav) {
-                self.field = Some(([k[0], k[1], k[2]], std::sync::Arc::new(f), tk));
-            }
             let need = match &self.field {
                 Some((fg, f, tb)) => {
                     let moved = dist(*fg, g);
@@ -332,11 +324,7 @@ impl Brain {
             if need && budget.remaining_ms() > p.field_min_budget_ms && (self.field.is_none() || self.spent_ms() < 8.0) {
                 let sg = nav.snap(g).filter(|q| q.iter().all(|x| x.is_finite())).unwrap_or(g);
                 let lim = dist2(pos, sg) * 2.0 + 120.0;
-                let shared = self.shared.clone();
-                let tol = p.field_regoal.max(0.0);
-                if let Some(f) = super::fieldsvc::request(&mut self.fsvc, 1, &shared, [g[0], g[1], g[2], jet_e], tol, t, budget, 10.0, move |nav| nav.field_limited(&[(sg, 0.0)], jet_e, lim)) {
-                    self.field = Some((g, std::sync::Arc::new(f), t));
-                }
+                self.field = Some((g, std::sync::Arc::new(nav.field_limited(&[(sg, 0.0)], jet_e, lim)), t));
             }
             if let Some((fg, f, _)) = &self.field {
                 let stale = dist(*fg, g);
@@ -346,7 +334,7 @@ impl Brain {
                             d0 = Some(d);
                             let stp = nav.step(f, pos);
                             if let Some(s) = stp {
-                                if s.kind == crate::nav::EDGE_JET && me.grounded && !(p.dg_nojet >= 2.0 && t - self.dg.active_t < 0.25 && matches!(self.mode, Mode::Fight | Mode::Idle)) && me.energy >= s.energy + 8.0 && dist2(pos, s.target) < 14.0 {
+                                if s.kind == crate::nav::EDGE_JET && me.grounded && me.energy >= s.energy + 8.0 && dist2(pos, s.target) < 14.0 {
                                     self.jet = Some((s.target, t));
                                     let dd = unit2(s.target[0] - pos[0], s.target[1] - pos[1]);
                                     self.last_dir = dd;
@@ -423,7 +411,7 @@ impl Brain {
         // juke axis
         let mut juke: Option<V2> = None;
         for th in &threats {
-            if th.ghost || !th.los_now || !(th.gun || th.mortar) || th.dist < p.juke_min_dist {
+            if th.ghost || !th.los_now || !(th.gun || th.mortar) || th.dist < p.juke_min_dist || (p.juke_max_dist > 0.0 && th.dist > p.juke_max_dist) {
                 continue;
             }
             let to_us = (center[1] - th.eye[1]).atan2(center[0] - th.eye[0]);
@@ -467,129 +455,6 @@ impl Brain {
             }
         }
 
-        let mut dgx: Option<(V2, f64, i64)> = None;
-        let mut dg_boost = false;
-        if p.dg_on > 0.0 || p.dg_lz > 0.0 {
-            let mut dg_lz = false;
-            if p.dg_lz > 0.0 {
-                for th in &threats {
-                    if th.ghost || !th.laser || !th.los_now || th.charge_left.is_none() {
-                        continue;
-                    }
-                    let to_us = (center[1] - th.eye[1]).atan2(center[0] - th.eye[0]);
-                    if adiff(th.aim_yaw, to_us).abs() > p.dg_lz_cone + (5.0f64).atan2(th.dist.max(1.0)) {
-                        continue;
-                    }
-                    let u = unit2(center[0] - th.eye[0], center[1] - th.eye[1]);
-                    dgx = Some(([-u[1], u[0]], th.dist, th.id));
-                    if t - th.since >= p.dg_lz_t && self.dg.lz_key != (th.id, th.since) {
-                        self.dg.lz_key = (th.id, th.since);
-                        self.dg.side = -self.dg.side;
-                        self.dg.last_flip = t;
-                        self.dg.cnt = 0;
-                        self.dg.next = t + p.dg_lz_hold.max(0.2);
-                        self.dg.lz_until = t + p.dg_lz_hold;
-                    }
-                    break;
-                }
-                dg_lz = t < self.dg.lz_until;
-            }
-            let dg_gun = p.dg_on > 0.0 && (p.dg_fight <= 0.0 || self.mode == Mode::Fight);
-            if dgx.is_none() && dg_gun {
-                for th in &threats {
-                    if !th.gun || th.dist < p.dg_min || th.dist > p.dg_max {
-                        continue;
-                    }
-                    if th.ghost {
-                        if p.dg_ghost <= 0.0 || t - self.mem.last_damage_t > 1.0 {
-                            continue;
-                        }
-                    } else {
-                        let to_us = (center[1] - th.eye[1]).atan2(center[0] - th.eye[0]);
-                        if !th.los_now || adiff(th.aim_yaw, to_us).abs() > p.dg_cone {
-                            continue;
-                        }
-                    }
-                    let u = unit2(center[0] - th.eye[0], center[1] - th.eye[1]);
-                    dgx = Some(([-u[1], u[0]], th.dist, th.id));
-                    break;
-                }
-            }
-            if dgx.is_none() && dg_gun && p.dg_bullet > 0.0 {
-                for s in &shots {
-                    if s.npc {
-                        continue;
-                    }
-                    let sp = s.v[0].hypot(s.v[1]);
-                    if sp < 50.0 {
-                        continue;
-                    }
-                    let u = [s.v[0] / sp, s.v[1] / sp];
-                    let rx = center[0] - s.p[0];
-                    let ry = center[1] - s.p[1];
-                    let along = rx * u[0] + ry * u[1];
-                    if along < 0.0 || (rx * u[1] - ry * u[0]).abs() > 8.0 {
-                        continue;
-                    }
-                    dgx = Some(([-u[1], u[0]], along.max(p.dg_min), -3));
-                    break;
-                }
-            }
-            if dgx.is_none() && dg_gun && p.dg_snd > 0.0 {
-                for sn in &obs.sounds {
-                    if sn.kind != "gun" || sn.age > 0.15 || !sn.bearing.is_finite() {
-                        continue;
-                    }
-                    let hit = threats.iter().find(|th| !th.ghost && th.los_now && th.gun && th.dist >= p.dg_min && adiff((th.eye[1] - center[1]).atan2(th.eye[0] - center[0]), sn.bearing).abs() < 0.3);
-                    if let Some(th) = hit {
-                        let u = unit2(center[0] - th.eye[0], center[1] - th.eye[1]);
-                        dgx = Some(([-u[1], u[0]], th.dist, th.id));
-                        break;
-                    }
-                    if p.dg_snd >= 2.0 && sn.dist != crate::proto::SoundDist::Far {
-                        let d: f64 = if sn.dist == crate::proto::SoundDist::Near { 50.0 } else { 110.0 };
-                        let b = sn.bearing;
-                        dgx = Some(([-b.sin(), b.cos()], d.max(p.dg_min), -4));
-                        break;
-                    }
-                }
-            }
-            if let Some((ax, d, id)) = dgx {
-                self.dg.keep = Some((ax, d, id, t + p.dg_keep));
-            } else if let Some((ax, d, id, until)) = self.dg.keep {
-                if t < until {
-                    dgx = Some((ax, d, id));
-                } else {
-                    self.dg.keep = None;
-                }
-            }
-            if let Some((ax, d, id)) = dgx {
-                juke = None;
-                if t - self.dg.active_t > 1.0 {
-                    let l = me.vel[0] * ax[0] + me.vel[1] * ax[1];
-                    self.dg.side = if l < 0.0 { -1.0 } else { 1.0 };
-                }
-                self.dg.active_t = t;
-                if id != self.dg.cnt_id {
-                    self.dg.cnt_id = id;
-                    self.dg.cnt = 0;
-                }
-                let lit = me.weapons.iter().flatten().any(|w| w.kind == WeaponKind::Lightning);
-                let lo = p.dg_e_lo.max(if lit { p.energy_reserve_lightning } else { p.energy_reserve });
-                if me.energy <= lo {
-                    self.dg.boost_on = false;
-                } else if me.energy >= p.dg_e_hi.max(lo + 10.0) {
-                    self.dg.boost_on = true;
-                }
-                dg_boost = p.dg_boost > 0.0 && me.grounded && ((d >= p.dg_bmin && d <= p.dg_bmax && self.dg.boost_on) || (dg_lz && me.energy > 6.0));
-                let ft = d / self.cfg.weapons.gun.speed.max(1.0);
-                let mz = p.dg_mz >= 1.0 && self.dg.cnt >= p.dg_mz as u32 && t - self.dg.last_flip >= p.dg_mz_gap;
-                if t >= self.dg.next || mz {
-                    self.dg_flip(t, dg_boost, ft);
-                }
-            }
-        }
-
         let under_fire = t - self.mem.last_damage_t < 1.0 || !shots.is_empty() || !blasts.is_empty() || threats.iter().any(|th| th.charge_left.is_some() && th.los_now);
         let has_lightning = me.weapons.iter().flatten().any(|w| w.kind == WeaponKind::Lightning);
         let reserve = if self.mode == Mode::Zone {
@@ -599,8 +464,13 @@ impl Brain {
         } else {
             p.energy_reserve
         };
-        let allow_boost = me.grounded && me.energy > reserve && (matches!(self.mode, Mode::Zone | Mode::Retreat | Mode::Drop | Mode::Roof) || under_fire || !me.in_zone || dg_boost);
-        let allow_boost = if dgx.map_or(false, |x| x.1 >= p.dg_bmin) && p.dg_boost > 0.0 && matches!(self.mode, Mode::Fight | Mode::Idle | Mode::Loot | Mode::Hunt) && me.in_zone { dg_boost && allow_boost } else { allow_boost };
+        let kite_boost = self.stand_off
+            && p.mx_boost > 0.0
+            && match self.goal {
+                Goal::Range { pos: g, pref } => dist2(pos, g) < pref - p.range_band - p.mx_boost,
+                _ => false,
+            };
+        let allow_boost = me.grounded && me.energy > reserve && (matches!(self.mode, Mode::Zone | Mode::Retreat | Mode::Drop | Mode::Roof) || under_fire || !me.in_zone || kite_boost);
         let slow = if fc.charging { st.charge_move_mult.clamp(0.1, 1.0) } else { 1.0 };
 
         // candidates
@@ -609,15 +479,15 @@ impl Brain {
         let nd = (p.n_dirs as usize).clamp(4, 32);
         let nb = (p.n_boost_dirs as usize).clamp(0, 32);
         let mut cands: Vec<Cand> = Vec::with_capacity(nd + nb + 1);
-        cands.push(Cand { dir: [0.0, 0.0], speed: 0.0, boost: false, pts: Vec::new(), blocked: 0.0, score: 0.0, hid: false, zout: 0.0 });
+        cands.push(Cand { dir: [0.0, 0.0], speed: 0.0, boost: false, pts: Vec::new(), blocked: 0.0, score: 0.0 });
         for k in 0..nd {
             let a = a0 + k as f64 * 2.0 * std::f64::consts::PI / nd as f64;
-            cands.push(Cand { dir: [a.cos(), a.sin()], speed: walk * slow, boost: false, pts: Vec::new(), blocked: 0.0, score: 0.0, hid: false, zout: 0.0 });
+            cands.push(Cand { dir: [a.cos(), a.sin()], speed: walk * slow, boost: false, pts: Vec::new(), blocked: 0.0, score: 0.0 });
         }
         if allow_boost {
             for k in 0..nb {
                 let a = a0 + k as f64 * 2.0 * std::f64::consts::PI / nb as f64;
-                cands.push(Cand { dir: [a.cos(), a.sin()], speed: st.boost_speed.max(walk) * slow, boost: true, pts: Vec::new(), blocked: 0.0, score: 0.0, hid: false, zout: 0.0 });
+                cands.push(Cand { dir: [a.cos(), a.sin()], speed: st.boost_speed.max(walk) * slow, boost: true, pts: Vec::new(), blocked: 0.0, score: 0.0 });
             }
         }
 
@@ -628,6 +498,12 @@ impl Brain {
             Mode::Loot | Mode::Hunt => p.w_progress_loot,
             Mode::Drop => p.w_progress_drop,
             Mode::Fight => p.w_progress_fight,
+        };
+        let full_r = self.cfg.cubes.pickup_radius + 1.0;
+        let avoid: Vec<V3> = if p.cube_avoid > 0.0 && me.cubes >= p.cube_avoid {
+            self.mem.cubes.iter().filter(|c| dist2(c.pos, pos) < 30.0 && (c.pos[2] - pos[2]).abs() < 6.0).map(|c| c.pos).collect()
+        } else {
+            Vec::new()
         };
         let (zc, zr) = zone_at(&obs.zone, t, t + horizon, self.zone_b);
         let z = &obs.zone;
@@ -659,7 +535,9 @@ impl Brain {
                 Goal::Range { pos: g, pref } => {
                     let e0 = ((dist2(pos, g) - pref).abs() - p.range_band).max(0.0);
                     let e1 = ((dist2(end, g) - pref).abs() - p.range_band).max(0.0);
-                    s += p.w_range * (e0 - e1);
+                    // opening the distance comes before the side step while the target is inside the stand-off distance
+                    let wr = if self.stand_off && dist2(pos, g) < pref - p.range_band { p.w_range * p.mx_w_back } else { p.w_range };
+                    s += wr * (e0 - e1);
                 }
                 Goal::None => {
                     s -= 0.6 * dist2(end, pos);
@@ -679,25 +557,11 @@ impl Brain {
                     s -= w_juke * 0.6;
                 }
             }
-            if let Some((ax, _, _)) = dgx {
-                let dg_w = match self.goal {
-                    Goal::Range { pos: g, pref } if ((dist2(pos, g) - pref).abs() - p.range_band) > 0.0 => p.dg_w * p.dg_rw,
-                    _ => p.dg_w,
-                };
-                s += dg_w * self.dg.side * (c.dir[0] * ax[0] + c.dir[1] * ax[1]) * (c.speed / walk).min(1.3);
-                if c.speed == 0.0 {
-                    s -= dg_w * 0.6;
-                }
-                if dg_boost && c.boost {
-                    s += p.dg_wb;
-                }
-            }
             if c.boost {
                 s -= p.w_boost * st.boost_drain * horizon;
             }
             // zone
             let out = dist2v(end, zc) - zr + p.zone_inner;
-            c.zout = out;
             if out > 0.0 {
                 let k = if self.mode == Mode::Zone || matches!(self.goal, Goal::Field { .. }) { p.zone_cost_zone_mode } else { p.zone_cost_mult };
                 s -= k * z.dps * (horizon * (out / p.zone_inner.max(0.1)).min(1.0) + out / walk);
@@ -713,6 +577,11 @@ impl Brain {
                 let d = dist(*q, end);
                 if d < p.npc_avoid {
                     s -= p.w_npc * (p.npc_avoid - d) * 0.2 + p.w_npc * (dist(*q, pos) - d).max(0.0);
+                }
+            }
+            for q in &avoid {
+                if c.pts.iter().any(|pt| dist2(*pt, *q) < full_r && (pt[2] - q[2]).abs() < 4.5) {
+                    s -= p.w_cube_avoid;
                 }
             }
             s -= p.w_proj * self.incoming_cost(c, &shots, &blasts, radius, height);
@@ -736,7 +605,6 @@ impl Brain {
                 let c = &mut cands[i];
                 let mut cost = 0.0;
                 let mut bonus = 0.0;
-                let mut hid = true;
                 for th in &threats {
                     let w_mode = match self.mode {
                         Mode::Retreat => p.expo_retreat,
@@ -768,9 +636,6 @@ impl Brain {
                             e += 0.5 * self.threat_dps(th, d) * (0.4 + 0.6 * al);
                         }
                     }
-                    if los_end && !th.ghost {
-                        hid = false;
-                    }
                     cost += p.w_expo * w_mode * e * horizon;
                     if th.is_target && self.mode == Mode::Fight && armed && los_end {
                         bonus += p.w_fight_los;
@@ -783,7 +648,6 @@ impl Brain {
                     }
                 }
                 c.score += bonus - cost;
-                c.hid = hid;
             }
         }
 
@@ -799,33 +663,6 @@ impl Brain {
         for i in 1..cands.len() {
             if cands[i].score > cands[best].score {
                 best = i;
-            }
-        }
-        if let Some((ax, d, _)) = dgx {
-            if p.dg_hard > 0.0 && !cands[best].hid && !fc.charging && me.in_zone && matches!(self.mode, Mode::Fight | Mode::Idle) {
-                let out0 = (dist2v(pos, zc) - zr + p.zone_inner).max(0.0);
-                let pick = |side: f64| -> Option<usize> {
-                    let mut b: Option<usize> = None;
-                    for (i, c) in cands.iter().enumerate() {
-                        if c.speed <= 0.0 || c.blocked > 0.0 || side * (c.dir[0] * ax[0] + c.dir[1] * ax[1]) < p.dg_dot {
-                            continue;
-                        }
-                        if c.zout > 0.0 && c.zout > out0 + 0.5 {
-                            continue;
-                        }
-                        if b.map_or(true, |j| c.score > cands[j].score) {
-                            b = Some(i);
-                        }
-                    }
-                    b
-                };
-                if let Some(i) = pick(self.dg.side) {
-                    best = i;
-                } else if let Some(i) = pick(-self.dg.side) {
-                    best = i;
-                    let ft = d / self.cfg.weapons.gun.speed.max(1.0);
-                    self.dg_flip(t, dg_boost, ft);
-                }
             }
         }
         let c = &cands[best];

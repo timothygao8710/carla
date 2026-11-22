@@ -2,8 +2,21 @@ use automata::world::{PrismKind, World};
 use std::path::PathBuf;
 use std::time::Instant;
 
+fn map_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("MECH_MAP") {
+        return PathBuf::from(p);
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for rel in ["../kit/arena", "../../mechfight-kit/arena"] {
+        if root.join(rel).join("v2/world.json").exists() {
+            return root.join(rel);
+        }
+    }
+    root.join("../kit/arena")
+}
+
 fn load() -> World {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../kit/arena");
+    let dir = map_dir();
     let t = Instant::now();
     let w = World::load(&dir).expect("load");
     eprintln!("load {:.1} ms, prisms {}, trees {}", t.elapsed().as_secs_f64() * 1e3, w.prisms.len(), w.trees.len());
@@ -30,7 +43,7 @@ fn brute_solid(w: &World, x: f64, y: f64, z: f64) -> bool {
 #[test]
 fn terrain_vertices() {
     let w = load();
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../kit/arena/v2/terrain.i16");
+    let dir = map_dir().join("v2/terrain.i16");
     let raw = std::fs::read(dir).unwrap();
     let (x0, y0, nx, ny) = w.terrain_grid();
     let mut r = Rng(7);
