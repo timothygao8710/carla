@@ -117,7 +117,7 @@ impl Brain {
             }
         }
         let cap = p.gear_cube_cap;
-        let wants_cube = self.gear_wants_cube(me.cubes, cap);
+        let wants_cube = me.cubes < cap || (me.cubes >= 13.0 && me.cubes < 15.0);
         if best.is_none() && wants_cube && real > p.gear_cube_safe {
             for it in &self.mem.cubes {
                 if self.mem.blacklisted(it.id, t) {
@@ -180,7 +180,7 @@ impl Brain {
         }
         let t = obs.t;
         let me = &obs.me;
-        let wants_cube = self.gear_wants_cube(me.cubes, p.gear_cube_cap);
+        let wants_cube = me.cubes < p.gear_cube_cap || (me.cubes >= 13.0 && me.cubes < 15.0);
         let mut best: Option<(f64, i64, V3)> = None;
         for it in &self.mem.pickups {
             if it.kind != WeaponKind::Laser || self.mem.blacklisted(it.id, t) || self.want(me, it.kind).is_none() || (it.pos[2] - me.pos[2]).abs() > 3.5 {
@@ -212,7 +212,7 @@ impl Brain {
         }
         let me = &obs.me;
         let d = dist(tr.pos, me.pos);
-        let wants_cube = self.gear_wants_cube(me.cubes, p.gear_cube_cap);
+        let wants_cube = me.cubes < p.gear_cube_cap || (me.cubes >= 13.0 && me.cubes < 15.0);
         wants_cube && d <= p.gear_npc_fire_r && frac(me.hp, me.max_hp) > 0.5
     }
 
@@ -305,15 +305,5 @@ impl Brain {
             return Some(wrap(yaw + 1.5));
         }
         None
-    }
-}
-
-impl Brain {
-    /// Gear goes for cubes below its cap, and from 13 to 15 for the next upgrade, unless a cube limit is set.
-    pub(crate) fn gear_wants_cube(&self, cubes: f64, cap: f64) -> bool {
-        if self.p.cube_avoid > 0.0 {
-            return cubes < self.p.cube_avoid.min(cap);
-        }
-        cubes < cap || (cubes >= 13.0 && cubes < 15.0)
     }
 }

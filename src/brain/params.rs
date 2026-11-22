@@ -198,16 +198,6 @@ pub struct Params {
     pub halt_nl: f64,
     pub halt_wl: f64,
     pub halt_k: f64,
-    /// after this many kills (squad play only), stop engaging and only survive
-    pub hold_k: f64,
-    /// after this many kills (squad play only), rest to full between fights
-    pub rest_after_k: f64,
-    /// the kill gate applies to the gated kill only, and opens ready_wait s after the previous kill
-    pub ready_once: f64,
-    pub ready_wait: f64,
-    /// at this many cubes or more, stop collecting and step around cubes (each one only makes the mech bigger)
-    pub cube_avoid: f64,
-    pub w_cube_avoid: f64,
     pub finish_hp: f64,
     pub finish_bonus: f64,
     pub finish_chase_mult: f64,
@@ -611,12 +601,6 @@ impl Default for Params {
             halt_nl: -1.0,
             halt_wl: -1.0,
             halt_k: 0.0,
-            hold_k: 0.0,
-            rest_after_k: 0.0,
-            ready_once: 0.0,
-            ready_wait: 30.0,
-            cube_avoid: 0.0,
-            w_cube_avoid: 30.0,
             gear_on: 0.0,
             gear_harmless_dmg: 150.0,
             gear_laser_threat_r: 170.0,

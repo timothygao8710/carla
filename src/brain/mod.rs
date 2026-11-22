@@ -284,7 +284,7 @@ impl Brain {
     }
 
     pub(crate) fn held(&self, t: f64) -> bool {
-        (self.p.hold_until >= 0.0 && t < self.p.hold_until) || (self.p.hold_k >= 1.0 && self.wave.kills as f64 >= self.p.hold_k && self.squad_mode())
+        self.p.hold_until >= 0.0 && t < self.p.hold_until
     }
 
     /// Short state line for logs and tools.
